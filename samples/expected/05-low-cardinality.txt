@@ -1,0 +1,4 @@
+SAMPLE	12000	12000	16
+FIELDS	key	distinct	max_min_ratio	stdev	skewed	suggestion	counts
+KEY	order_id	12000	1.03	7.71	no	keep	757,748,763,756,742,762,752,742,745,752,738,745,756,738,748,756
+KEY	status	3	inf	1561.25	yes	replace:order_id	0,0,0,0,4000,0,0,4000,0,0,0,0,4000,0,0,0

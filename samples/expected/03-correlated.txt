@@ -1,0 +1,5 @@
+SAMPLE	20000	20000	16
+FIELDS	key	distinct	max_min_ratio	stdev	skewed	suggestion	counts
+KEY	city	21	inf	1798.96	yes	salt:上海:6	600,2750,0,600,0,7600,450,0,1500,1550,950,0,1200,400,1700,700
+KEY	province+city	21	inf	1840.35	yes	salt:华东|上海:6	250,1700,1700,0,2300,0,450,150,0,1100,1300,7400,0,3150,0,500
+KEY	province	4	inf	2512.47	yes	replace:city	0,0,0,0,0,2000,4000,0,0,9000,0,0,0,0,0,5000
