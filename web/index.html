@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>shardeye · 分片键评估</title>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+         margin: 24px; color: #1c1c1e; background: #fafafa; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  #summary { color: #555; margin-bottom: 16px; }
+  table { border-collapse: collapse; width: 100%; background: #fff; }
+  th, td { border: 1px solid #ddd; padding: 6px 10px; text-align: left;
+           font-size: 13px; vertical-align: middle; }
+  th { background: #f0f0f2; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .skewed-yes { color: #c62828; font-weight: 700; }
+  .skewed-no { color: #2e7d32; }
+  canvas { display: block; }
+  #error { color: #c62828; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>shardeye · 分片键评估</h1>
+<div id="summary"></div>
+<div id="error"></div>
+<table id="report" hidden>
+  <thead>
+    <tr>
+      <th>key</th><th>分片负载</th><th>max_min_ratio</th><th>stdev</th>
+      <th>distinct</th><th>skewed</th><th>suggestion</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+<script type="module">
+// 页面只负责展示：所有数字直接取自引擎写出的 data.json，不做任何重算。
+
+const BAR_W = 14, BAR_GAP = 2, CHART_H = 72, PAD = 2;
+
+function fmtRatio(value) {
+  return value === null ? "inf" : Number(value).toFixed(2);
+}
+
+function fmtStdev(value) {
+  return Number(value).toFixed(2);
+}
+
+function fmtSuggestion(s) {
+  if (s.type === "keep") return "keep";
+  if (s.type === "salt") return `salt:${s.value}:${s.salt_count}`;
+  return `${s.type}:${s.target ?? "-"}`;
+}
+
+function drawChart(canvas, counts, overloaded) {
+  const k = counts.length;
+  const w = k * (BAR_W + BAR_GAP) - BAR_GAP + PAD * 2;
+  const h = CHART_H + PAD * 2;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width = `${w}px`;
+  canvas.style.height = `${h}px`;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+  const max = Math.max(...counts, 1);
+  for (let i = 0; i < k; i++) {
+    const barH = Math.max(1, Math.round((counts[i] / max) * CHART_H));
+    const x = PAD + i * (BAR_W + BAR_GAP);
+    const y = PAD + CHART_H - barH;
+    ctx.fillStyle = overloaded[i] ? "#d32f2f" : "#90a4ae";
+    ctx.fillRect(x, y, BAR_W, barH);
+  }
+}
+
+async function main() {
+  const resp = await fetch("data.json", { cache: "no-store" });
+  if (!resp.ok) throw new Error(`fetch data.json: HTTP ${resp.status}`);
+  const data = await resp.json();
+
+  document.getElementById("summary").textContent =
+    `rows_total=${data.rows_total} rows_sampled=${data.rows_sampled} shards=${data.shards}`;
+
+  const tbody = document.querySelector("#report tbody");
+  for (const cand of data.candidates) {
+    const tr = document.createElement("tr");
+
+    const keyTd = document.createElement("td");
+    keyTd.textContent = cand.key;
+    tr.appendChild(keyTd);
+
+    const chartTd = document.createElement("td");
+    const canvas = document.createElement("canvas");
+    chartTd.appendChild(canvas);
+    tr.appendChild(chartTd);
+    drawChart(canvas, cand.counts, cand.overloaded);
+
+    for (const text of [fmtRatio(cand.max_min_ratio), fmtStdev(cand.stdev), String(cand.distinct)]) {
+      const td = document.createElement("td");
+      td.className = "num";
+      td.textContent = text;
+      tr.appendChild(td);
+    }
+
+    const skewTd = document.createElement("td");
+    skewTd.textContent = cand.skewed ? "yes" : "no";
+    skewTd.className = cand.skewed ? "skewed-yes" : "skewed-no";
+    tr.appendChild(skewTd);
+
+    const sugTd = document.createElement("td");
+    sugTd.textContent = fmtSuggestion(cand.suggestion);
+    tr.appendChild(sugTd);
+
+    tbody.appendChild(tr);
+  }
+  document.getElementById("report").hidden = false;
+}
+
+main().catch((err) => {
+  document.getElementById("error").textContent =
+    `加载 data.json 失败：${err.message}\n请先在 web/ 目录下运行 python -m http.server，并用 python -m shardeye 生成数据。`;
+});
+</script>
+</body>
+</html>
