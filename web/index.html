@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>shardeye · 分片键评估</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    font: 14px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f6f7f9; color: #1f2329;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .meta { color: #5b616b; margin-bottom: 16px; }
+  .meta b { color: #1f2329; font-variant-numeric: tabular-nums; }
+  .legend { color: #5b616b; font-size: 12px; margin-bottom: 16px; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 4px 0 12px; vertical-align: -1px; }
+  .row {
+    display: flex; align-items: center; gap: 16px;
+    background: #fff; border: 1px solid #e3e6ea; border-radius: 8px;
+    padding: 12px 16px; margin-bottom: 10px;
+  }
+  .row.skewed { border-color: #f0b4b4; }
+  .key { width: 180px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 600; word-break: break-all; }
+  canvas { flex: 0 0 auto; }
+  .metrics { display: flex; gap: 18px; font-variant-numeric: tabular-nums; }
+  .metric .label { display: block; font-size: 11px; color: #8a9099; }
+  .metric .value { font-weight: 600; }
+  .badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; }
+  .badge.yes { background: #fde2e2; color: #c03434; }
+  .badge.no { background: #dcf2e3; color: #1d7a3d; }
+  .suggestion { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: #37404a; }
+  #error { color: #c03434; }
+</style>
+</head>
+<body>
+<h1>shardeye · 分片负载</h1>
+<div class="meta" id="meta">加载中…</div>
+<div class="legend">
+  柱高 = 该分片的样本计数（所有候选共用同一纵轴刻度）
+  <span class="swatch" style="background:#4c7dd9"></span>正常
+  <span class="swatch" style="background:#e05252"></span>过载（≥ 1.5× 均值）
+</div>
+<div id="rows"></div>
+<script type="module">
+const BAR_W = 22, BAR_GAP = 4, CHART_H = 96, PAD_TOP = 6, PAD_BOTTOM = 16;
+const COLOR_OK = "#4c7dd9", COLOR_HOT = "#e05252";
+
+function suggestionText(s) {
+  if (s.type === "keep") return "keep";
+  if (s.type === "salt") return `salt:${s.value}:${s.salt_count}`;
+  return `${s.type}:${s.target ?? "-"}`;
+}
+
+function ratioText(r) { return r === null ? "inf" : r.toFixed(2); }
+
+function drawRow(canvas, cand, globalMax, shards) {
+  const width = shards * (BAR_W + BAR_GAP) - BAR_GAP;
+  const height = PAD_TOP + CHART_H + PAD_BOTTOM;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = width * dpr;
+  canvas.height = height * dpr;
+  canvas.style.width = width + "px";
+  canvas.style.height = height + "px";
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+
+  const baseline = PAD_TOP + CHART_H;
+  ctx.strokeStyle = "#d4d9df";
+  ctx.beginPath();
+  ctx.moveTo(0, baseline + 0.5);
+  ctx.lineTo(width, baseline + 0.5);
+  ctx.stroke();
+
+  const mean = cand.counts.reduce((a, b) => a + b, 0) / shards;
+  const meanY = baseline - (mean / globalMax) * CHART_H;
+  ctx.strokeStyle = "#b9c0c9";
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.moveTo(0, meanY + 0.5);
+  ctx.lineTo(width, meanY + 0.5);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.textAlign = "center";
+  ctx.font = "9px ui-monospace, Menlo, monospace";
+  cand.counts.forEach((count, i) => {
+    const x = i * (BAR_W + BAR_GAP);
+    const h = Math.max(count > 0 ? 2 : 0, (count / globalMax) * CHART_H);
+    ctx.fillStyle = cand.overloaded[i] ? COLOR_HOT : COLOR_OK;
+    ctx.fillRect(x, baseline - h, BAR_W, h);
+    ctx.fillStyle = "#8a9099";
+    ctx.fillText(String(i), x + BAR_W / 2, baseline + 11);
+  });
+}
+
+async function main() {
+  const meta = document.getElementById("meta");
+  const rows = document.getElementById("rows");
+  let data;
+  try {
+    const resp = await fetch("data.json");
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    data = await resp.json();
+  } catch (err) {
+    meta.innerHTML = `<span id="error">无法加载 data.json：${err.message}。请先运行 python -m shardeye 生成，并用 python -m http.server 访问本页。</span>`;
+    return;
+  }
+
+  meta.innerHTML = `总行数 <b>${data.rows_total}</b> · 样本 <b>${data.rows_sampled}</b> · 分片数 <b>${data.shards}</b>`;
+
+  const globalMax = Math.max(1, ...data.candidates.flatMap(c => c.counts));
+
+  for (const cand of data.candidates) {
+    const row = document.createElement("div");
+    row.className = "row" + (cand.skewed ? " skewed" : "");
+
+    const key = document.createElement("div");
+    key.className = "key";
+    key.textContent = cand.key;
+    row.appendChild(key);
+
+    const canvas = document.createElement("canvas");
+    row.appendChild(canvas);
+
+    const metrics = document.createElement("div");
+    metrics.className = "metrics";
+    metrics.innerHTML =
+      `<span class="metric"><span class="label">max/min</span><span class="value">${ratioText(cand.max_min_ratio)}</span></span>` +
+      `<span class="metric"><span class="label">stdev</span><span class="value">${cand.stdev.toFixed(2)}</span></span>` +
+      `<span class="metric"><span class="label">distinct</span><span class="value">${cand.distinct}</span></span>`;
+    row.appendChild(metrics);
+
+    const badge = document.createElement("span");
+    badge.className = "badge " + (cand.skewed ? "yes" : "no");
+    badge.textContent = cand.skewed ? "skewed" : "ok";
+    row.appendChild(badge);
+
+    const sug = document.createElement("span");
+    sug.className = "suggestion";
+    sug.textContent = suggestionText(cand.suggestion);
+    row.appendChild(sug);
+
+    rows.appendChild(row);
+    drawRow(canvas, cand, globalMax, data.shards);
+  }
+}
+
+main();
+</script>
+</body>
+</html>
